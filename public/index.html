@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Caller.js — Auto WebRTC</title>
+    <style>
+        * {
+            font-family: 'Helvetica', 'Helvetica Neue', Arial, sans-serif;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #1a1a2e;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .app-container {
+            max-width: 1200px;
+            width: 100%;
+            background: #16213e;
+            border-radius: 28px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        .video-area {
+            background: #0f0f1a;
+            border-radius: 24px;
+            overflow: hidden;
+            position: relative;
+            margin-bottom: 20px;
+            aspect-ratio: 16 / 9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+        }
+
+        .video-placeholder {
+            color: #aaa;
+            font-size: 1.2rem;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .video-text {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            color: white;
+            font-family: Helvetica, sans-serif;
+            font-size: 1rem;
+            padding: 12px 20px;
+            text-align: center;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+            justify-content: center;
+        }
+
+        button {
+            background: #0f3460;
+            border: none;
+            color: white;
+            font-family: Helvetica, sans-serif;
+            font-size: 0.9rem;
+            font-weight: bold;
+            padding: 10px 20px;
+            border-radius: 60px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        button:hover {
+            background: #e94560;
+            transform: scale(1.02);
+        }
+
+        .status-box {
+            background: #0f0f1a;
+            border-radius: 20px;
+            padding: 12px 20px;
+            margin-bottom: 16px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #0f0;
+            word-break: break-all;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .room-panel {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        input, select {
+            background: #0a0a14;
+            color: white;
+            border: 1px solid #2c3e66;
+            border-radius: 30px;
+            padding: 8px 16px;
+            font-family: Helvetica, sans-serif;
+        }
+
+        .peer-list {
+            background: #0f0f1a;
+            border-radius: 20px;
+            padding: 12px;
+            margin-bottom: 16px;
+            font-size: 0.85rem;
+        }
+
+        h1 {
+            margin: 0 0 12px 0;
+            font-size: 1.8rem;
+            color: white;
+        }
+
+        .badge {
+            display: inline-block;
+            background: #2c3e66;
+            border-radius: 30px;
+            padding: 4px 12px;
+            font-size: 0.7rem;
+        }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <h1>Caller.js <span class="badge" id="modeBadge">auto signaling</span></h1>
+
+    <div class="room-panel">
+        <input type="text" id="roomInput" placeholder="Room name" value="lobby">
+        <input type="text" id="nameInput" placeholder="Your name" value="User_" + Math.floor(Math.random()*1000)">
+        <button id="joinBtn">Join Room</button>
+    </div>
+
+    <div class="peer-list" id="peerListDiv">
+        Peers online: <span id="peerList">none</span>
+    </div>
+
+    <div class="video-area" id="videoContainer">
+        <div id="remoteVideoWrapper" style="width:100%; height:100%; position:relative; display:none;">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="video-text" id="videoCaption">Waiting for call...</div>
+        </div>
+        <div id="textOnlyPlaceholder" class="video-placeholder">
+            Not in a call
+        </div>
+    </div>
+
+    <div class="status-box" id="statusLog">
+        Join a room to start.
+    </div>
+
+    <div class="controls">
+        <button id="callBtn" disabled>Call Selected Peer</button>
+        <button id="toggleVideoBtn">Toggle Video</button>
+        <button id="hangupBtn">HANGUP</button>
+    </div>
+    
+    <select id="peerSelect" style="width:100%; margin-top:10px;">
+        <option>Select a peer to call...</option>
+    </select>
+</div>
+
+<script>
+    // DOM elements
+    const remoteVideo = document.getElementById('remoteVideo');
+    const remoteVideoWrapper = document.getElementById('remoteVideoWrapper');
+    const textOnlyPlaceholder = document.getElementById('textOnlyPlaceholder');
+    const videoCaption = document.getElementById('videoCaption');
+    const statusLogDiv = document.getElementById('statusLog');
+    const peerListSpan = document.getElementById('peerList');
+    const peerSelect = document.getElementById('peerSelect');
+    const callBtn = document.getElementById('callBtn');
+    const toggleVideoBtn = document.getElementById('toggleVideoBtn');
+    const hangupBtn = document.getElementById('hangupBtn');
+    const joinBtn = document.getElementById('joinBtn');
+    const roomInput = document.getElementById('roomInput');
+    const nameInput = document.getElementById('nameInput');
+
+    // WebRTC globals
+    let peerConnection = null;
+    let localStream = null;
+    let useVideo = false;
+    let ws = null;
+    let currentRoom = null;
+    let myName = '';
+    let peersInRoom = [];
+    let currentCallPeer = null;
+
+    const configuration = {
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
+    function addLog(msg, isBeep = false) {
+        const timestamp = new Date().toLocaleTimeString();
+        statusLogDiv.innerHTML += `[${timestamp}] ${msg}\n`;
+        statusLogDiv.scrollTop = statusLogDiv.scrollHeight;
+        if (isBeep) playBeep();
+    }
+
+    function playBeep() {
+        try {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.frequency.value = 880;
+            gain.gain.value = 0.3;
+            osc.start();
+            gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.5);
+            osc.stop(audioCtx.currentTime + 0.5);
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        } catch(e) {}
+    }
+
+    async function getMedia() {
+        if (localStream) {
+            localStream.getTracks().forEach(t => t.stop());
+        }
+        const constraints = useVideo ? { video: true, audio: true } : { audio: true };
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia(constraints);
+            addLog(`Got ${useVideo ? 'video+audio' : 'audio'} stream`);
+            return localStream;
+        } catch (err) {
+            addLog(`Media error: ${err.message}`);
+            return null;
+        }
+    }
+
+    async function createPeerConnection(targetPeer) {
+        if (peerConnection) peerConnection.close();
+        peerConnection = new RTCPeerConnection(configuration);
+
+        peerConnection.ontrack = (event) => {
+            addLog(`Received ${event.track.kind} track`);
+            if (event.track.kind === 'video') {
+                remoteVideo.srcObject = event.streams[0];
+                remoteVideoWrapper.style.display = 'block';
+                textOnlyPlaceholder.style.display = 'none';
+            }
+        };
+
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'ice-candidate',
+                    target: targetPeer,
+                    candidate: event.candidate
+                }));
+            }
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+            addLog(`Connection state: ${peerConnection.connectionState}`);
+            if (peerConnection.connectionState === 'connected') {
+                addLog('Call active', true);
+                videoCaption.innerText = `Call with ${targetPeer}`;
+            }
+        };
+
+        if (localStream) {
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+        }
+        return peerConnection;
+    }
+
+    async function startCall(targetPeer) {
+        if (!targetPeer || targetPeer === myName) {
+            addLog('Select a valid peer first');
+            return;
+        }
+        
+        addLog(`📞 Calling ${targetPeer}...`, true);
+        currentCallPeer = targetPeer;
+        
+        await getMedia();
+        const pc = await createPeerConnection(targetPeer);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        ws.send(JSON.stringify({
+            type: 'offer',
+            target: targetPeer,
+            offer: offer
+        }));
+    }
+
+    async function handleOffer(offer, fromPeer) {
+        addLog(`Incoming call from ${fromPeer}`, true);
+        currentCallPeer = fromPeer;
+        
+        await getMedia();
+        const pc = await createPeerConnection(fromPeer);
+        await pc.setRemoteDescription(offer);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        
+        ws.send(JSON.stringify({
+            type: 'answer',
+            target: fromPeer,
+            answer: answer
+        }));
+        
+        remoteVideoWrapper.style.display = useVideo ? 'block' : 'none';
+        textOnlyPlaceholder.style.display = useVideo ? 'none' : 'flex';
+        videoCaption.innerText = `Call with ${fromPeer}`;
+    }
+
+    async function handleAnswer(answer, fromPeer) {
+        if (peerConnection && peerConnection.remoteDescription === null) {
+            await peerConnection.setRemoteDescription(answer);
+            addLog(`Answer received from ${fromPeer}`);
+        }
+    }
+
+    async function handleIceCandidate(candidate, fromPeer) {
+        if (peerConnection) {
+            await peerConnection.addIceCandidate(candidate);
+        }
+    }
+
+    function hangup() {
+        if (peerConnection) peerConnection.close();
+        peerConnection = null;
+        if (localStream) {
+            localStream.getTracks().forEach(t => t.stop());
+            localStream = null;
+        }
+        currentCallPeer = null;
+        remoteVideoWrapper.style.display = 'none';
+        textOnlyPlaceholder.style.display = 'flex';
+        textOnlyPlaceholder.innerText = 'Call ended';
+        addLog('Call ended');
+    }
+
+    function updatePeerList(peers) {
+        peersInRoom = peers.filter(p => p !== myName);
+        peerListSpan.innerText = peersInRoom.length ? peersInRoom.join(', ') : 'none';
+        peerSelect.innerHTML = '<option>Select a peer to call...</option>';
+        peersInRoom.forEach(peer => {
+            const option = document.createElement('option');
+            option.value = peer;
+            option.textContent = peer;
+            peerSelect.appendChild(option);
+        });
+        callBtn.disabled = peersInRoom.length === 0;
+    }
+
+    function connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}`;
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = () => {
+            addLog('Connected to signaling server');
+            ws.send(JSON.stringify({
+                type: 'join',
+                room: currentRoom,
+                name: myName
+            }));
+        };
+        
+        ws.onmessage = async (event) => {
+            const msg = JSON.parse(event.data);
+            switch(msg.type) {
+                case 'peer-list':
+                    updatePeerList(msg.peers);
+                    break;
+                case 'user-joined':
+                    addLog(`${msg.name} joined the room`);
+                    updatePeerList([...peersInRoom, msg.name]);
+                    break;
+                case 'user-left':
+                    addLog(`${msg.name} left`);
+                    if (currentCallPeer === msg.name) hangup();
+                    updatePeerList(peersInRoom.filter(p => p !== msg.name));
+                    break;
+                case 'offer':
+                    await handleOffer(msg.offer, msg.from);
+                    break;
+                case 'answer':
+                    await handleAnswer(msg.answer, msg.from);
+                    break;
+                case 'ice-candidate':
+                    await handleIceCandidate(msg.candidate, msg.from);
+                    break;
+            }
+        };
+        
+        ws.onerror = (err) => addLog(`WebSocket error: ${err.message}`);
+        ws.onclose = () => addLog('Disconnected from server');
+    }
+
+    joinBtn.onclick = () => {
+        if (ws) ws.close();
+        currentRoom = roomInput.value.trim() || 'lobby';
+        myName = nameInput.value.trim() || `User_${Math.floor(Math.random()*1000)}`;
+        addLog(`🎮 Joining room '${currentRoom}' as '${myName}'`);
+        connectWebSocket();
+        hangup();
+    };
+    
+    callBtn.onclick = () => {
+        const target = peerSelect.value;
+        if (target && target !== 'Select a peer to call...') startCall(target);
+    };
+    
+    toggleVideoBtn.onclick = async () => {
+        useVideo = !useVideo;
+        addLog(`🎥 Video ${useVideo ? 'ON' : 'OFF'}`);
+        if (peerConnection && currentCallPeer) {
+            // renegotiate
+            await getMedia();
+            const sender = peerConnection.getSenders().find(s => s.track?.kind === 'video');
+            if (sender && localStream) {
+                const newTrack = localStream.getVideoTracks()[0];
+                if (newTrack) await sender.replaceTrack(newTrack);
+            } else if (localStream) {
+                localStream.getTracks().forEach(t => peerConnection.addTrack(t, localStream));
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                ws.send(JSON.stringify({ type: 'offer', target: currentCallPeer, offer }));
+            }
+        }
+    };
+    
+    hangupBtn.onclick = hangup;
+    
+    // random name default
+    nameInput.value = `User_${Math.floor(Math.random() * 1000)}`;
+    addLog('Caller.js ready — join a room to start calling!');
+</script>
+</body>
+</html>
