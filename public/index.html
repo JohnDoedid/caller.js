@@ -6,6 +6,7 @@
     <title>CALLER.JS.</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@msgpack/msgpack@2.8.0/dist/msgpack.min.js"></script>
     <style>
         :root {
             --bg:      #0a0a0a;
@@ -488,7 +489,7 @@
                     <div class="snum">2</div>
                     <div class="sbody">
                         <div class="flabel">your offer code</div>
-                        <div class="sdesc">Generate, then send this to your peer via any channel.</div>
+                        <div class="sdesc">Generate, then send this to your peer via any channel. (NOTICE: By generating and sending to your partner, you agree to our T&C: caller-js.onrender.com/tc.html)<br>only send to those you trust most...</div>
                         <textarea id="OO" readonly placeholder="Click generate offer..."></textarea>
                         <div class="brow">
                             <button class="btn" id="GO">Generate offer</button>
@@ -524,7 +525,7 @@
                     <div class="snum">2</div>
                     <div class="sbody">
                         <div class="flabel">your answer code</div>
-                        <div class="sdesc">Send this back to the caller. They complete the connection.</div>
+                        <div class="sdesc">Send this back to the caller. They complete the connection. (You are sure)</div>
                         <textarea id="AO" readonly placeholder="Your answer code appears here..."></textarea>
                         <div class="brow">
                             <button class="btn" id="CA">Copy</button>
@@ -544,7 +545,7 @@
 
 <!-- TOPBAR -->
 <div class="topbar">
-    <div class="logo">CALLER.JS.<em> / p2p</em></div>
+    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.2.1</em></div>
     <div class="topbar-right">
         <div class="pill" id="PILL">idle</div>
     </div>
@@ -777,7 +778,9 @@ async function getAudio() {
 function buildPC() {
     if (peerCon) peerCon.close();
     peerCon = new RTCPeerConnection(ICE);
-
+    peerCon.onnegotiationneeded = () => {
+        if (callState === 'connected') startRenegotiation();
+    };
     peerCon.ontrack = function(e) {
         var s = e.streams[0];
         if (e.track.kind === 'video') {
@@ -819,20 +822,141 @@ function buildPC() {
 }
 
 function wireCh(ch) {
-    ch.onmessage = function(e) {
+    function sendSignaling(msg) {
+        if (ch && ch.readyState === 'open') {
+            ch.send(JSON.stringify({ type: 'signal', data: msg }));
+        }
+    }
+    ch.onmessage = (e) => {
         try {
-            var d = JSON.parse(e.data);
-            if (d.type === 'chat') addMsg(d.author, d.text, false);
+            const msg = JSON.parse(e.data);
+            if (msg.type === 'chat') addMsg(msg.author, msg.text, false);
+            else if (msg.type === 'signal') handleRenegotiation(msg.data);
         } catch(_) {}
     };
+    ch.sendSignal = sendSignaling;
 }
 
+function sendSignaling(msg) {
+    const ch = dataCh || remoteCh;
+    if (ch && ch.sendSignal) ch.sendSignal(msg);
+}
+async function handleRenegotiation(data) {
+    if (!peerCon) return;
+    if (data.type === 'offer') {
+        await peerCon.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        for (let c of data.candidates) await peerCon.addIceCandidate(c);
+        
+        const answer = await peerCon.createAnswer();
+        await peerCon.setLocalDescription(answer);
+        
+        // Wait for ICE candidates
+        const candidates = await new Promise(resolve => {
+            const cs = [];
+            peerCon.onicecandidate = e => {
+                if (e.candidate) cs.push(e.candidate);
+                else resolve(cs);
+            };
+        });
+        
+        sendSignaling({ type: 'answer', sdp: peerCon.localDescription, candidates });
+    } else if (data.type === 'answer') {
+        await peerCon.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        for (let c of data.candidates) await peerCon.addIceCandidate(c);
+    }
+}
+
+async function startRenegotiation() {
+    if (!peerCon) return;
+    const offer = await peerCon.createOffer();
+    await peerCon.setLocalDescription(offer);
+    
+    // Wait for ICE candidates to be gathered
+    const candidates = await new Promise(resolve => {
+        const cs = [];
+        peerCon.onicecandidate = e => {
+            if (e.candidate) cs.push(e.candidate);
+            else resolve(cs);
+        };
+    });
+    
+    sendSignaling({ type: 'offer', sdp: peerCon.localDescription, candidates });
+}
 function collectICE(pc, fn) {
     var cs = [];
     pc.onicecandidate = function(e) {
         if (e.candidate) cs.push(e.candidate);
         else fn(cs);
     };
+}
+// Helper: convert ArrayBuffer to base64url
+function bufToBase64Url(buf) {
+    return btoa(String.fromCharCode(...new Uint8Array(buf)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// Helper: base64url to Uint8Array
+function base64UrlToBuf(str) {
+    const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+}
+
+// Derive a crypto key from a password (e.g., myRoom + optional secret)
+async function getKey(password, salt) {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw', enc.encode(password),
+        'PBKDF2', false, ['deriveKey']
+    );
+    return crypto.subtle.deriveKey(
+        {
+            name: 'PBKDF2',
+            salt: salt,
+            iterations: 100000,
+            hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+    );
+}
+
+// Encrypt token (data is any object, password is shared secret)
+async function encryptToken(data, password) {
+    const encoded = msgpack.encode(data);  // compact binary
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await getKey(password, salt);
+    const encrypted = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        encoded
+    );
+    // Combine salt + iv + ciphertext
+    const combined = new Uint8Array(salt.length + iv.length + encrypted.byteLength);
+    combined.set(salt, 0);
+    combined.set(iv, salt.length);
+    combined.set(new Uint8Array(encrypted), salt.length + iv.length);
+    return bufToBase64Url(combined);
+}
+
+// Decrypt token back to original object
+async function decryptToken(token, password) {
+    const combined = base64UrlToBuf(token);
+    const salt = combined.slice(0, 16);
+    const iv = combined.slice(16, 28);
+    const ciphertext = combined.slice(28);
+    const key = await getKey(password, salt);
+    const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv },
+        key,
+        ciphertext
+    );
+    return msgpack.decode(new Uint8Array(decrypted));
 }
 
 async function doOffer() {
@@ -841,13 +965,18 @@ async function doOffer() {
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
     dataCh = pc.createDataChannel('chat');
     wireCh(dataCh);
-    return new Promise(function(res) {
-        collectICE(pc, function(cs) { res({ sdp: pc.localDescription, candidates: cs }); });
+    return new Promise(async function(res) {
+        collectICE(pc, async function(cs) {
+            const offerData = { sdp: pc.localDescription, candidates: cs };
+            const encrypted = await encryptToken(offerData, myRoom); // use room as password
+            res(encrypted);
+        });
         pc.createOffer().then(function(o){ pc.setLocalDescription(o); });
     });
 }
 
-async function doAnswer(offerData) {
+async function doAnswer(offerToken) {
+    const offerData = await decryptToken(offerToken, myRoom);
     var pc = buildPC();
     await getAudio();
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
@@ -855,13 +984,17 @@ async function doAnswer(offerData) {
     for (var i = 0; i < offerData.candidates.length; i++) {
         await pc.addIceCandidate(offerData.candidates[i]);
     }
-    return new Promise(function(res) {
-        collectICE(pc, function(cs) { res({ sdp: pc.localDescription, candidates: cs }); });
+    return new Promise(async function(res) {
+        collectICE(pc, async function(cs) {
+            const answerData = { sdp: pc.localDescription, candidates: cs };
+            const encrypted = await encryptToken(answerData, myRoom);
+            res(encrypted);
+        });
         pc.createAnswer().then(function(a){ pc.setLocalDescription(a); });
     });
 }
-
-async function applyAnswer(answerData) {
+async function applyAnswer(answerToken) {
+    const answerData = await decryptToken(answerToken, myRoom);
     await peerCon.setRemoteDescription(answerData.sdp);
     for (var i = 0; i < answerData.candidates.length; i++) {
         await peerCon.addIceCandidate(answerData.candidates[i]);
@@ -875,7 +1008,7 @@ $('GO').onclick = async function() {
     remoteN = $('PN').value.trim() || 'peer';
     try {
         var d = await doOffer();
-        $('OO').value = btoa(JSON.stringify(d));
+        $('OO').value = d;
         $('GO').textContent = 'done';
         log('offer ready', 'ok');
         notice('offer ready. copy and send it.');
@@ -895,8 +1028,7 @@ $('CN').onclick = async function() {
     if (!$('AI').value.trim()) { notice('paste answer code first', 'err'); return; }
     $('CN').disabled = true; $('CN').textContent = 'connecting...';
     try {
-        var d = JSON.parse(atob($('AI').value.trim()));
-        await applyAnswer(d);
+        await applyAnswer($('AI').value.trim());
         $('CN').textContent = 'done';
         log('answer applied', 'ok');
     } catch(e) {
@@ -911,9 +1043,8 @@ $('GA').onclick = async function() {
     $('GA').disabled = true; $('GA').textContent = 'generating...';
     callState = 'connecting'; setPill('connecting');
     try {
-        var d = JSON.parse(atob($('OI').value.trim()));
-        var ans = await doAnswer(d);
-        $('AO').value = btoa(JSON.stringify(ans));
+        var ans = await doAnswer($('OI').value.trim());
+        $('AO').value = ans;
         $('GA').textContent = 'done';
         log('answer ready', 'ok');
         notice('answer ready. copy and send it back.');
@@ -985,12 +1116,14 @@ $('CB2').onclick = async function() {
             log('camera: ' + e.message, 'err');
             notice('camera error', 'err');
         }
+        startRenegotiation();
     } else {
         var snd = peerCon.getSenders().find(function(s){ return s.track && s.track.kind === 'video'; });
         if (snd) peerCon.removeTrack(snd);
         $('LV').srcObject = null; $('LV').classList.remove('on'); $('LP').style.display = '';
         $('CB2').classList.remove('warn');
         log('camera off');
+        startRenegotiation();
     }
 };
 
@@ -1004,6 +1137,7 @@ $('SB').onclick = async function() {
         $('LV').srcObject = null; $('LV').classList.remove('on'); $('LP').style.display = '';
         $('SB').classList.remove('warn'); $('SB').textContent = 'S';
         log('screen share stopped'); notice('screen share stopped');
+        startRenegotiation();
         return;
     }
     try {
@@ -1020,8 +1154,10 @@ $('SB').onclick = async function() {
             $('SB').classList.remove('warn'); $('SB').textContent = 'S';
             $('LV').srcObject = null; $('LV').classList.remove('on'); $('LP').style.display = '';
             log('screen share ended');
+            startRenegotiation();
         };
         log('screen sharing', 'ok'); notice('screen sharing');
+        startRenegotiation();
     } catch(e) {
         if (e.name !== 'NotAllowedError') { log('screen: ' + e.message, 'err'); notice('screen error', 'err'); }
     }
