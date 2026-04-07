@@ -544,7 +544,7 @@
 
 <!-- TOPBAR -->
 <div class="topbar">
-    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.4.1, added better warning</em></div>
+    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.4.2, rrpalced base64 with other secure.</em></div>
     <div class="topbar-right">
         <div class="pill" id="PILL">idle</div>
     </div>
@@ -858,39 +858,143 @@ function collectICE(pc, fn) {
     };
 }
 
-async function doOffer() {
+// Encrypt SDP with token
+async function encryptSDP(sdpContent, token) {
+    const encoder = new TextEncoder();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(token),
+        'PBKDF2',
+        false,
+        ['deriveKey']
+    );
+    
+    const key = await crypto.subtle.deriveKey(
+        {
+            name: 'PBKDF2',
+            salt: encoder.encode('sdp-salt'),
+            iterations: 100000,
+            hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt']
+    );
+    
+    const encrypted = await crypto.subtle.encrypt(
+        {
+            name: 'AES-GCM',
+            iv: iv
+        },
+        key,
+        encoder.encode(sdpContent)
+    );
+    
+    const combined = new Uint8Array(iv.length + encrypted.byteLength);
+    combined.set(iv);
+    combined.set(new Uint8Array(encrypted), iv.length);
+    
+    return btoa(String.fromCharCode(...combined));
+}
+
+// Decrypt SDP with token
+async function decryptSDP(encryptedData, token) {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    
+    const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
+    const iv = combined.slice(0, 12);
+    const data = combined.slice(12);
+    
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(token),
+        'PBKDF2',
+        false,
+        ['deriveKey']
+    );
+    
+    const key = await crypto.subtle.deriveKey(
+        {
+            name: 'PBKDF2',
+            salt: encoder.encode('sdp-salt'),
+            iterations: 100000,
+            hash: 'SHA-256'
+        },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['decrypt']
+    );
+    
+    const decrypted = await crypto.subtle.decrypt(
+        {
+            name: 'AES-GCM',
+            iv: iv
+        },
+        key,
+        data
+    );
+    
+    return decoder.decode(decrypted);
+}
+
+// Usage example:
+// const encrypted = await encryptSDP("v=0\r\no=- 123456 2 IN IP4 127.0.0.1", "my-secret-token");
+// const decrypted = await decryptSDP(encrypted, "my-secret-token");
+    async function doOffer() {
     var pc = buildPC();
     await getAudio();
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
     dataCh = pc.createDataChannel('chat');
     wireCh(dataCh);
     return new Promise(function(res) {
-        collectICE(pc, function(cs) { res({ sdp: pc.localDescription, candidates: cs }); });
+        collectICE(pc, async function(cs) {  // Make this async
+            // Encrypt the SDP before sending
+            const encryptedSDP = await encryptSDP(JSON.stringify(pc.localDescription), token);
+            res({ sdp: encryptedSDP, candidates: cs });  // Send encrypted
+        });
         pc.createOffer().then(function(o){ pc.setLocalDescription(o); });
     });
-}
+    }
 
 async function doAnswer(offerData) {
     var pc = buildPC();
     await getAudio();
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
-    await pc.setRemoteDescription(offerData.sdp);
+    
+    // Decrypt the received SDP
+    const decryptedSDP = await decryptSDP(offerData.sdp, token);
+    const remoteDesc = JSON.parse(decryptedSDP);
+    
+    await pc.setRemoteDescription(remoteDesc);
     for (var i = 0; i < offerData.candidates.length; i++) {
         await pc.addIceCandidate(offerData.candidates[i]);
     }
     return new Promise(function(res) {
-        collectICE(pc, function(cs) { res({ sdp: pc.localDescription, candidates: cs }); });
+        collectICE(pc, async function(cs) {  // Make this async
+            // Encrypt the answer SDP
+            const encryptedSDP = await encryptSDP(JSON.stringify(pc.localDescription), token);
+            res({ sdp: encryptedSDP, candidates: cs });  // Send encrypted
+        });
         pc.createAnswer().then(function(a){ pc.setLocalDescription(a); });
     });
 }
-
+    
 async function applyAnswer(answerData) {
-    await peerCon.setRemoteDescription(answerData.sdp);
+    // Decrypt the received SDP
+    const decryptedSDP = await decryptSDP(answerData.sdp, token);
+    const remoteDesc = JSON.parse(decryptedSDP);
+    
+    await peerCon.setRemoteDescription(remoteDesc);
     for (var i = 0; i < answerData.candidates.length; i++) {
         await peerCon.addIceCandidate(answerData.candidates[i]);
     }
-}
-
+    }
+    
 // OFFER BUTTONS
 $('GO').onclick = async function() {
     $('GO').disabled = true; $('GO').textContent = 'generating...';
