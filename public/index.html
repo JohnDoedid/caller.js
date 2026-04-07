@@ -6,7 +6,7 @@
     <title>CALLER.JS.</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/msgpack-lite/0.1.26/msgpack.min.js"></script>
+    <script src="https://unpkg.com/@msgpack/msgpack@2.8.0/dist/msgpack.min.js"></script>
     <style>
         :root {
             --bg:      #0a0a0a;
@@ -545,7 +545,7 @@
 
 <!-- TOPBAR -->
 <div class="topbar">
-    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.2.3 fixed msgpack import</em></div>
+    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.2.4 fixed unsafe decryption</em></div>
     <div class="topbar-right">
         <div class="pill" id="PILL">idle</div>
     </div>
@@ -946,17 +946,22 @@ async function encryptToken(data, password) {
 
 // Decrypt token back to original object
 async function decryptToken(token, password) {
-    const combined = base64UrlToBuf(token);
-    const salt = combined.slice(0, 16);
-    const iv = combined.slice(16, 28);
-    const ciphertext = combined.slice(28);
-    const key = await getKey(password, salt);
-    const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv },
-        key,
-        ciphertext
-    );
-    return msgpack.decode(new Uint8Array(decrypted));
+    try {
+        const combined = base64UrlToBuf(token);
+        const salt = combined.slice(0, 16);
+        const iv = combined.slice(16, 28);
+        const ciphertext = combined.slice(28);
+        const key = await getKey(password, salt);
+        const decrypted = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv },
+            key,
+            ciphertext
+        );
+        return msgpack.decode(new Uint8Array(decrypted));
+    } catch (e) {
+        console.error('Decryption failed:', e);
+        throw e;
+    }
 }
 
 async function doOffer() {
