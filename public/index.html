@@ -183,9 +183,13 @@
         <button id="hangupBtn">HANGUP</button>
     </div>
     
-    <select id="peerSelect" style="width:100%; margin-top:10px;">
-        <option>Select a peer to call...</option>
-    </select>
+    <div style="width:100%; margin-top:10px; position:relative;">
+        <input type="text" id="peerInput" list="peerDatalist" placeholder="Type or select a peer to call..." 
+               style="width:100%; background:#0a0a14; color:white; border:1px solid #2c3e66; border-radius:30px; padding:8px 16px; font-family:Helvetica, sans-serif;">
+        <datalist id="peerDatalist">
+            <option value="">Select a peer to call...</option>
+    </datalist>
+    </div>
 </div>
 
 <script>
@@ -196,7 +200,8 @@
     const videoCaption = document.getElementById('videoCaption');
     const statusLogDiv = document.getElementById('statusLog');
     const peerListSpan = document.getElementById('peerList');
-    const peerSelect = document.getElementById('peerSelect');
+    const peerInput = document.getElementById('peerInput');
+    const peerDatalist = document.getElementById('peerDatalist');
     const callBtn = document.getElementById('callBtn');
     const toggleVideoBtn = document.getElementById('toggleVideoBtn');
     const hangupBtn = document.getElementById('hangupBtn');
@@ -365,17 +370,23 @@
     }
 
     function updatePeerList(peers) {
-        peersInRoom = peers.filter(p => p !== myName);
-        peerListSpan.innerText = peersInRoom.length ? peersInRoom.join(', ') : 'none';
-        peerSelect.innerHTML = '<option>Select a peer to call...</option>';
-        peersInRoom.forEach(peer => {
-            const option = document.createElement('option');
-            option.value = peer;
-            option.textContent = peer;
-            peerSelect.appendChild(option);
-        });
-        callBtn.disabled = peersInRoom.length === 0;
-    }
+    peersInRoom = peers.filter(p => p !== myName);
+    peerListSpan.innerText = peersInRoom.length ? peersInRoom.join(', ') : 'none';
+    
+    // Update datalist for the text input (autocomplete suggestions)
+    peerDatalist.innerHTML = '<option value="">Select a peer to call...</option>';
+    peersInRoom.forEach(peer => {
+        const option = document.createElement('option');
+        option.value = peer;
+        peerDatalist.appendChild(option);
+    });
+    
+    // Enable/disable call button based on whether there is any peer available
+    callBtn.disabled = peersInRoom.length === 0;
+    
+    // Optionally clear the input when room changes (prevents stale names)
+    peerInput.value = '';
+}
 
     function connectWebSocket() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -432,9 +443,15 @@
     };
     
     callBtn.onclick = () => {
-        const target = peerSelect.value;
-        if (target && target !== 'Select a peer to call...') startCall(target);
-    };
+    const target = peerInput.value.trim();
+    if (target && target !== '' && peersInRoom.includes(target)) {
+        startCall(target);
+    } else if (target && !peersInRoom.includes(target)) {
+        addLog(`WHOOPS: "${target}" is not in the room. Available: ${peersInRoom.join(', ') || 'none'}`);
+    } else {
+        addLog('Please type a valid peer name from the list above, or copy the name your friend gave you.');
+    }
+};
     
     toggleVideoBtn.onclick = async () => {
         useVideo = !useVideo;
