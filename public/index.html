@@ -1,4 +1,4 @@
-\<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -6,17 +6,6 @@
     <title>CALLER.JS.</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-    <script type="importmap">
-    {
-        "imports": {
-            "@msgpack/msgpack": "https://esm.sh/@msgpack/msgpack@2.8.0"
-        }
-    }
-</script>
-<script type="module">
-    import * as msgpack from '@msgpack/msgpack';
-    window.msgpack = msgpack;
-</script>
     <style>
         :root {
             --bg:      #0a0a0a;
@@ -499,7 +488,7 @@
                     <div class="snum">2</div>
                     <div class="sbody">
                         <div class="flabel">your offer code</div>
-                        <div class="sdesc">Generate, then send this to your peer via any channel. (NOTICE: By generating and sending to your partner, you agree to our T&C: caller-js.onrender.com/tc.html)<br>only send to those you trust most...</div>
+                        <div class="sdesc">Generate, then send this to your peer via any channel. (NOTICE: By generating and sending to your partner, you agree to our T&C: caller-js.onrender.com/tc.html)<br>only send to those you trust most..</div>
                         <textarea id="OO" readonly placeholder="Click generate offer..."></textarea>
                         <div class="brow">
                             <button class="btn" id="GO">Generate offer</button>
@@ -535,7 +524,7 @@
                     <div class="snum">2</div>
                     <div class="sbody">
                         <div class="flabel">your answer code</div>
-                        <div class="sdesc">Send this back to the caller. They complete the connection. (You are sure)</div>
+                        <div class="sdesc">Send this back to the caller. They complete the connection.</div>
                         <textarea id="AO" readonly placeholder="Your answer code appears here..."></textarea>
                         <div class="brow">
                             <button class="btn" id="CA">Copy</button>
@@ -555,7 +544,7 @@
 
 <!-- TOPBAR -->
 <div class="topbar">
-    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.3.0 fixed unsafe decryption again</em></div>
+    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.4.0</em></div>
     <div class="topbar-right">
         <div class="pill" id="PILL">idle</div>
     </div>
@@ -788,9 +777,7 @@ async function getAudio() {
 function buildPC() {
     if (peerCon) peerCon.close();
     peerCon = new RTCPeerConnection(ICE);
-    peerCon.onnegotiationneeded = () => {
-        if (callState === 'connected') startRenegotiation();
-    };
+
     peerCon.ontrack = function(e) {
         var s = e.streams[0];
         if (e.track.kind === 'video') {
@@ -832,65 +819,36 @@ function buildPC() {
 }
 
 function wireCh(ch) {
-    function sendSignaling(msg) {
-        if (ch && ch.readyState === 'open') {
-            ch.send(JSON.stringify({ type: 'signal', data: msg }));
-        }
-    }
-    ch.onmessage = (e) => {
-        try {
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'chat') addMsg(msg.author, msg.text, false);
-            else if (msg.type === 'signal') handleRenegotiation(msg.data);
-        } catch(_) {}
-    };
-    ch.sendSignal = sendSignaling;
-}
-
+    // Inside wireCh() or after data channel opens
 function sendSignaling(msg) {
     const ch = dataCh || remoteCh;
-    if (ch && ch.sendSignal) ch.sendSignal(msg);
+    if (ch && ch.readyState === 'open') {
+        ch.send(JSON.stringify({ type: 'signal', data: msg }));
+    }
+}
+
+// In wireCh(), handle incoming signals
+ch.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'chat') addMsg(msg.author, msg.text, false);
+    if (msg.type === 'signal') handleRenegotiation(msg.data);
+};
 }
 async function handleRenegotiation(data) {
-    if (!peerCon) return;
     if (data.type === 'offer') {
-        await peerCon.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        for (let c of data.candidates) await peerCon.addIceCandidate(c);
-        
+        await peerCon.setRemoteDescription(data.sdp);
         const answer = await peerCon.createAnswer();
         await peerCon.setLocalDescription(answer);
-        
-        // Wait for ICE candidates
-        const candidates = await new Promise(resolve => {
-            const cs = [];
-            peerCon.onicecandidate = e => {
-                if (e.candidate) cs.push(e.candidate);
-                else resolve(cs);
-            };
-        });
-        
-        sendSignaling({ type: 'answer', sdp: peerCon.localDescription, candidates });
+        sendSignaling({ type: 'answer', sdp: peerCon.localDescription });
     } else if (data.type === 'answer') {
-        await peerCon.setRemoteDescription(new RTCSessionDescription(data.sdp));
-        for (let c of data.candidates) await peerCon.addIceCandidate(c);
+        await peerCon.setRemoteDescription(data.sdp);
     }
 }
 
 async function startRenegotiation() {
-    if (!peerCon) return;
     const offer = await peerCon.createOffer();
     await peerCon.setLocalDescription(offer);
-    
-    // Wait for ICE candidates to be gathered
-    const candidates = await new Promise(resolve => {
-        const cs = [];
-        peerCon.onicecandidate = e => {
-            if (e.candidate) cs.push(e.candidate);
-            else resolve(cs);
-        };
-    });
-    
-    sendSignaling({ type: 'offer', sdp: peerCon.localDescription, candidates });
+    sendSignaling({ type: 'offer', sdp: peerCon.localDescription });
 }
 function collectICE(pc, fn) {
     var cs = [];
@@ -899,82 +857,6 @@ function collectICE(pc, fn) {
         else fn(cs);
     };
 }
-// Helper: convert ArrayBuffer to base64url
-function bufToBase64Url(buf) {
-    return btoa(String.fromCharCode(...new Uint8Array(buf)))
-        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-// Helper: base64url to Uint8Array
-function base64UrlToBuf(str) {
-    let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-    // Add padding to make length multiple of 4
-    while (base64.length % 4) base64 += '=';
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return bytes;
-}
-
-// Derive a crypto key from a password (e.g., myRoom + optional secret)
-async function getKey(password, salt) {
-    const enc = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-        'raw', enc.encode(password),
-        'PBKDF2', false, ['deriveKey']
-    );
-    return crypto.subtle.deriveKey(
-        {
-            name: 'PBKDF2',
-            salt: salt,
-            iterations: 100000,
-            hash: 'SHA-256'
-        },
-        keyMaterial,
-        { name: 'AES-GCM', length: 256 },
-        false,
-        ['encrypt', 'decrypt']
-    );
-}
-
-// Encrypt token (data is any object, password is shared secret)
-async function encryptToken(data, password) {
-    const encoded = msgpack.encode(data);  // compact binary
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await getKey(password, salt);
-    const encrypted = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv },
-        key,
-        encoded
-    );
-    // Combine salt + iv + ciphertext
-    const combined = new Uint8Array(salt.length + iv.length + encrypted.byteLength);
-    combined.set(salt, 0);
-    combined.set(iv, salt.length);
-    combined.set(new Uint8Array(encrypted), salt.length + iv.length);
-    return bufToBase64Url(combined);
-}
-
-// Decrypt token back to original object
-async function decryptToken(token, password) {
-    try {
-        const combined = base64UrlToBuf(token);
-        const salt = combined.slice(0, 16);
-        const iv = combined.slice(16, 28);
-        const ciphertext = combined.slice(28);
-        const key = await getKey(password, salt);
-        const decrypted = await crypto.subtle.decrypt(
-            { name: 'AES-GCM', iv },
-            key,
-            ciphertext
-        );
-        return msgpack.decode(new Uint8Array(decrypted));
-    } catch (e) {
-        console.error('Decryption failed:', e);
-        throw e;
-    }
-}
 
 async function doOffer() {
     var pc = buildPC();
@@ -982,18 +864,13 @@ async function doOffer() {
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
     dataCh = pc.createDataChannel('chat');
     wireCh(dataCh);
-    return new Promise(async function(res) {
-        collectICE(pc, async function(cs) {
-            const offerData = { sdp: pc.localDescription, candidates: cs };
-            const encrypted = await encryptToken(offerData, myRoom); // use room as password
-            res(encrypted);
-        });
+    return new Promise(function(res) {
+        collectICE(pc, function(cs) { res({ sdp: pc.localDescription, candidates: cs }); });
         pc.createOffer().then(function(o){ pc.setLocalDescription(o); });
     });
 }
 
-async function doAnswer(offerToken) {
-    const offerData = await decryptToken(offerToken, myRoom);
+async function doAnswer(offerData) {
     var pc = buildPC();
     await getAudio();
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
@@ -1001,17 +878,13 @@ async function doAnswer(offerToken) {
     for (var i = 0; i < offerData.candidates.length; i++) {
         await pc.addIceCandidate(offerData.candidates[i]);
     }
-    return new Promise(async function(res) {
-        collectICE(pc, async function(cs) {
-            const answerData = { sdp: pc.localDescription, candidates: cs };
-            const encrypted = await encryptToken(answerData, myRoom);
-            res(encrypted);
-        });
+    return new Promise(function(res) {
+        collectICE(pc, function(cs) { res({ sdp: pc.localDescription, candidates: cs }); });
         pc.createAnswer().then(function(a){ pc.setLocalDescription(a); });
     });
 }
-async function applyAnswer(answerToken) {
-    const answerData = await decryptToken(answerToken, myRoom);
+
+async function applyAnswer(answerData) {
     await peerCon.setRemoteDescription(answerData.sdp);
     for (var i = 0; i < answerData.candidates.length; i++) {
         await peerCon.addIceCandidate(answerData.candidates[i]);
@@ -1025,7 +898,7 @@ $('GO').onclick = async function() {
     remoteN = $('PN').value.trim() || 'peer';
     try {
         var d = await doOffer();
-        $('OO').value = d;
+        $('OO').value = btoa(JSON.stringify(d));
         $('GO').textContent = 'done';
         log('offer ready', 'ok');
         notice('offer ready. copy and send it.');
@@ -1045,7 +918,8 @@ $('CN').onclick = async function() {
     if (!$('AI').value.trim()) { notice('paste answer code first', 'err'); return; }
     $('CN').disabled = true; $('CN').textContent = 'connecting...';
     try {
-        await applyAnswer($('AI').value.trim());
+        var d = JSON.parse(atob($('AI').value.trim()));
+        await applyAnswer(d);
         $('CN').textContent = 'done';
         log('answer applied', 'ok');
     } catch(e) {
@@ -1060,8 +934,9 @@ $('GA').onclick = async function() {
     $('GA').disabled = true; $('GA').textContent = 'generating...';
     callState = 'connecting'; setPill('connecting');
     try {
-        var ans = await doAnswer($('OI').value.trim());
-        $('AO').value = ans;
+        var d = JSON.parse(atob($('OI').value.trim()));
+        var ans = await doAnswer(d);
+        $('AO').value = btoa(JSON.stringify(ans));
         $('GA').textContent = 'done';
         log('answer ready', 'ok');
         notice('answer ready. copy and send it back.');
@@ -1128,12 +1003,12 @@ $('CB2').onclick = async function() {
             $('LV').srcObject = vs; $('LV').classList.add('on'); $('LP').style.display = 'none';
             $('CB2').classList.add('warn');
             log('camera on', 'ok');
+            startRenegotiation();
         } catch(e) {
             camOn = false;
             log('camera: ' + e.message, 'err');
             notice('camera error', 'err');
         }
-        startRenegotiation();
     } else {
         var snd = peerCon.getSenders().find(function(s){ return s.track && s.track.kind === 'video'; });
         if (snd) peerCon.removeTrack(snd);
