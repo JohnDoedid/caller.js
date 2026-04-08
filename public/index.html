@@ -435,7 +435,7 @@
 <!-- JOIN -->
 <div class="jscreen" id="JS">
     <div class="jcard">
-        <div class="jlogo">CALLER.JS.<small>peer-to-peer calling. no servers.</small></div>
+        <div class="jlogo">CALLER.JS.<small>p2p calls and epic chat. </small></div>
         <div class="jfields">
             <div class="frow">
                 <div class="flabel">display name</div>
@@ -560,7 +560,7 @@
 
 <!-- TOPBAR -->
 <div class="topbar">
-    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 2.0.1, let's see what deepseek can do for us</em></div>
+    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 2.0.2, let's see what deepseek can do for us</em></div>
     <div class="topbar-right">
         <div class="pill" id="PILL">idle</div>
     </div>
@@ -1028,7 +1028,7 @@ $('CO').onclick = function() {
 };
 
 $('GA').onclick = async function() {
-    var token = $('TOKEN').value.trim();
+    var token = $('TOKEN_ANSWER').value.trim();
     if (!token) { notice('enter shared token first', 'err'); return; }
     if (!$('OI').value.trim()) { notice('paste offer code first', 'err'); return; }
     $('GA').disabled = true; $('GA').textContent = 'generating...';
