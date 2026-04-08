@@ -485,6 +485,14 @@
                     </div>
                 </div>
                 <div class="step">
+    <div class="snum">sacred key</div>
+    <div class="sbody">
+        <div class="flabel">shared token</div>
+        <div class="sdesc">decrypt and encrypt using this key.</div>
+        <input type="text" id="TOKEN" placeholder="e.g. blue$kitten89" autocomplete="off">
+    </div>
+                </div>
+                <div class="step">
                     <div class="snum">2</div>
                     <div class="sbody">
                         <div class="flabel">your offer code</div>
@@ -544,7 +552,7 @@
 
 <!-- TOPBAR -->
 <div class="topbar">
-    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 1.4.2, rrpalced base64 with other secure.</em></div>
+    <div class="logo">CALLER.JS.<em> / p2p, though you are not anonymous. beta 2.0.0, let's see what deepseek can do for us</em></div>
     <div class="topbar-right">
         <div class="pill" id="PILL">idle</div>
     </div>
@@ -631,6 +639,7 @@
 </div>
 
 <script>
+    // ==================== FULL SECURE SCRIPT ====================
 var myName = '', myRoom = '', peerCon = null, localSt = null;
 var dataCh = null, remoteCh = null;
 var muted = false, camOn = false, sharing = false;
@@ -818,8 +827,7 @@ function buildPC() {
     return peerCon;
 }
 
-function wireCh(ch) {
-    // Inside wireCh() or after data channel opens
+// Global sendSignaling function
 function sendSignaling(msg) {
     const ch = dataCh || remoteCh;
     if (ch && ch.readyState === 'open') {
@@ -827,13 +835,14 @@ function sendSignaling(msg) {
     }
 }
 
-// In wireCh(), handle incoming signals
-ch.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'chat') addMsg(msg.author, msg.text, false);
-    if (msg.type === 'signal') handleRenegotiation(msg.data);
-};
+function wireCh(ch) {
+    ch.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'chat') addMsg(msg.author, msg.text, false);
+        if (msg.type === 'signal') handleRenegotiation(msg.data);
+    };
 }
+
 async function handleRenegotiation(data) {
     if (data.type === 'offer') {
         await peerCon.setRemoteDescription(data.sdp);
@@ -850,7 +859,7 @@ async function startRenegotiation() {
     await peerCon.setLocalDescription(offer);
     sendSignaling({ type: 'offer', sdp: peerCon.localDescription });
 }
-function collectICE(pc, fn) {
+    function collectICE(pc, fn) {
     var cs = [];
     pc.onicecandidate = function(e) {
         if (e.candidate) cs.push(e.candidate);
@@ -858,7 +867,7 @@ function collectICE(pc, fn) {
     };
 }
 
-// Encrypt SDP with token
+// ========== ENCRYPTION FUNCTIONS (AES-GCM) ==========
 async function encryptSDP(sdpContent, token) {
     const encoder = new TextEncoder();
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -885,10 +894,7 @@ async function encryptSDP(sdpContent, token) {
     );
     
     const encrypted = await crypto.subtle.encrypt(
-        {
-            name: 'AES-GCM',
-            iv: iv
-        },
+        { name: 'AES-GCM', iv: iv },
         key,
         encoder.encode(sdpContent)
     );
@@ -896,15 +902,12 @@ async function encryptSDP(sdpContent, token) {
     const combined = new Uint8Array(iv.length + encrypted.byteLength);
     combined.set(iv);
     combined.set(new Uint8Array(encrypted), iv.length);
-    
     return btoa(String.fromCharCode(...combined));
 }
 
-// Decrypt SDP with token
 async function decryptSDP(encryptedData, token) {
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
-    
     const combined = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
     const iv = combined.slice(0, 12);
     const data = combined.slice(12);
@@ -931,80 +934,78 @@ async function decryptSDP(encryptedData, token) {
     );
     
     const decrypted = await crypto.subtle.decrypt(
-        {
-            name: 'AES-GCM',
-            iv: iv
-        },
+        { name: 'AES-GCM', iv: iv },
         key,
         data
     );
-    
     return decoder.decode(decrypted);
 }
 
-// Usage example:
-// const encrypted = await encryptSDP("v=0\r\no=- 123456 2 IN IP4 127.0.0.1", "my-secret-token");
-// const decrypted = await decryptSDP(encrypted, "my-secret-token");
-    async function doOffer() {
+// ========== SECURE OFFER/ANSWER (full package encryption) ==========
+async function doOffer(token) {
     var pc = buildPC();
     await getAudio();
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
     dataCh = pc.createDataChannel('chat');
     wireCh(dataCh);
     return new Promise(function(res) {
-        collectICE(pc, async function(cs) {  // Make this async
-            // Encrypt the SDP before sending
-            const encryptedSDP = await encryptSDP(JSON.stringify(pc.localDescription), token);
-            res({ sdp: encryptedSDP, candidates: cs });  // Send encrypted
+        collectICE(pc, async function(cs) {
+            const pkg = {
+                sdp: pc.localDescription,
+                candidates: cs
+            };
+            const encrypted = await encryptSDP(JSON.stringify(pkg), token);
+            res(encrypted);
         });
         pc.createOffer().then(function(o){ pc.setLocalDescription(o); });
     });
-    }
+}
 
-async function doAnswer(offerData) {
+async function doAnswer(encryptedOffer, token) {
     var pc = buildPC();
     await getAudio();
     if (localSt) localSt.getTracks().forEach(function(t){ pc.addTrack(t, localSt); });
     
-    // Decrypt the received SDP
-    const decryptedSDP = await decryptSDP(offerData.sdp, token);
-    const remoteDesc = JSON.parse(decryptedSDP);
-    
-    await pc.setRemoteDescription(remoteDesc);
+    const decrypted = await decryptSDP(encryptedOffer, token);
+    const offerData = JSON.parse(decrypted);
+    await pc.setRemoteDescription(offerData.sdp);
     for (var i = 0; i < offerData.candidates.length; i++) {
         await pc.addIceCandidate(offerData.candidates[i]);
     }
     return new Promise(function(res) {
-        collectICE(pc, async function(cs) {  // Make this async
-            // Encrypt the answer SDP
-            const encryptedSDP = await encryptSDP(JSON.stringify(pc.localDescription), token);
-            res({ sdp: encryptedSDP, candidates: cs });  // Send encrypted
+        collectICE(pc, async function(cs) {
+            const pkg = {
+                sdp: pc.localDescription,
+                candidates: cs
+            };
+            const encrypted = await encryptSDP(JSON.stringify(pkg), token);
+            res(encrypted);
         });
         pc.createAnswer().then(function(a){ pc.setLocalDescription(a); });
     });
 }
-    
-async function applyAnswer(answerData) {
-    // Decrypt the received SDP
-    const decryptedSDP = await decryptSDP(answerData.sdp, token);
-    const remoteDesc = JSON.parse(decryptedSDP);
-    
-    await peerCon.setRemoteDescription(remoteDesc);
+
+async function applyAnswer(encryptedAnswer, token) {
+    const decrypted = await decryptSDP(encryptedAnswer, token);
+    const answerData = JSON.parse(decrypted);
+    await peerCon.setRemoteDescription(answerData.sdp);
     for (var i = 0; i < answerData.candidates.length; i++) {
         await peerCon.addIceCandidate(answerData.candidates[i]);
     }
-    }
-    
-// OFFER BUTTONS
+}
+
+// ========== BUTTON HANDLERS (SECURE) ==========
 $('GO').onclick = async function() {
+    var token = $('TOKEN').value.trim();
+    if (!token) { notice('enter shared token first', 'err'); return; }
     $('GO').disabled = true; $('GO').textContent = 'generating...';
     callState = 'calling';
     remoteN = $('PN').value.trim() || 'peer';
     try {
-        var d = await doOffer();
-        $('OO').value = btoa(JSON.stringify(d));
+        var encryptedOffer = await doOffer(token);
+        $('OO').value = encryptedOffer;
         $('GO').textContent = 'done';
-        log('offer ready', 'ok');
+        log('offer ready (encrypted)', 'ok');
         notice('offer ready. copy and send it.');
     } catch(e) {
         log('offer: ' + e.message, 'err');
@@ -1018,35 +1019,22 @@ $('CO').onclick = function() {
     navigator.clipboard.writeText($('OO').value).then(function(){ notice('copied'); });
 };
 
-$('CN').onclick = async function() {
-    if (!$('AI').value.trim()) { notice('paste answer code first', 'err'); return; }
-    $('CN').disabled = true; $('CN').textContent = 'connecting...';
-    try {
-        var d = JSON.parse(atob($('AI').value.trim()));
-        await applyAnswer(d);
-        $('CN').textContent = 'done';
-        log('answer applied', 'ok');
-    } catch(e) {
-        log('connect: ' + e.message, 'err');
-        notice('invalid answer code', 'err');
-        $('CN').disabled = false; $('CN').textContent = 'Connect';
-    }
-};
-
 $('GA').onclick = async function() {
+    var token = $('TOKEN').value.trim();
+    if (!token) { notice('enter shared token first', 'err'); return; }
     if (!$('OI').value.trim()) { notice('paste offer code first', 'err'); return; }
     $('GA').disabled = true; $('GA').textContent = 'generating...';
     callState = 'connecting'; setPill('connecting');
     try {
-        var d = JSON.parse(atob($('OI').value.trim()));
-        var ans = await doAnswer(d);
-        $('AO').value = btoa(JSON.stringify(ans));
+        var encryptedOffer = $('OI').value.trim();
+        var encryptedAnswer = await doAnswer(encryptedOffer, token);
+        $('AO').value = encryptedAnswer;
         $('GA').textContent = 'done';
-        log('answer ready', 'ok');
+        log('answer ready (encrypted)', 'ok');
         notice('answer ready. copy and send it back.');
     } catch(e) {
         log('answer: ' + e.message, 'err');
-        notice('invalid offer code', 'err');
+        notice('invalid offer code or wrong token', 'err');
         $('GA').disabled = false; $('GA').textContent = 'Generate answer';
     }
 };
@@ -1054,6 +1042,23 @@ $('GA').onclick = async function() {
 $('CA').onclick = function() {
     if (!$('AO').value) { notice('generate answer first', 'err'); return; }
     navigator.clipboard.writeText($('AO').value).then(function(){ notice('copied'); });
+};
+
+$('CN').onclick = async function() {
+    var token = $('TOKEN').value.trim();
+    if (!token) { notice('enter shared token first', 'err'); return; }
+    if (!$('AI').value.trim()) { notice('paste answer code first', 'err'); return; }
+    $('CN').disabled = true; $('CN').textContent = 'connecting...';
+    try {
+        var encryptedAnswer = $('AI').value.trim();
+        await applyAnswer(encryptedAnswer, token);
+        $('CN').textContent = 'done';
+        log('answer applied', 'ok');
+    } catch(e) {
+        log('connect: ' + e.message, 'err');
+        notice('invalid answer code or wrong token', 'err');
+        $('CN').disabled = false; $('CN').textContent = 'Connect';
+    }
 };
 
 // HANGUP
@@ -1184,7 +1189,7 @@ function sendMsg() {
 $('CS').onclick = sendMsg;
 $('CI').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); sendMsg(); } });
 
-log('CALLER.JS. ready');
+log('CALLER.JS. ready.');
 log('join and click "New call" to start', 'info');
 </script>
 </body>
